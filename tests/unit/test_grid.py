@@ -4,9 +4,12 @@ Unit tests for SCHISM grid functionality.
 This module tests the core grid components of the SCHISM implementation.
 """
 
-import pytest
+from pathlib import Path
 
-from rompy_schism.grid import GR3Generator
+import pytest
+from rompy.core.data import DataBlob
+
+from rompy_schism.grid import GR3Generator, GridLinker
 
 pytest.importorskip("rompy_schism")
 
@@ -131,6 +134,28 @@ class TestGR3Generator:
         with pytest.raises(Exception):
             generator = GR3Generator(hgrid=hgrid_path, gr3_type="drag", value=None)
             generator.generate(tmp_path)
+
+
+class TestGridLinker:
+    """Tests for hgridll / hgrid_WWM symlinks via GridLinker."""
+
+    @pytest.mark.parametrize("gridtype,filename", [
+        ("hgridll", "hgrid.ll"),
+        ("hgrid_WWM", "hgrid_WWM.gr3"),
+    ])
+    def test_generate_with_str_copied(self, tmp_path, gridtype, filename):
+        """DataBlob._copied is a str (rompy); GridLinker must not call .name on it."""
+        hgrid_file = tmp_path / "hgrid.gr3"
+        hgrid_file.write_text("dummy hgrid\n")
+
+        blob = DataBlob(source=hgrid_file)
+        # Mimic DataBlob.get(): stores a string path, not a Path
+        blob._copied = str(hgrid_file)
+
+        dest = GridLinker(hgrid=blob, gridtype=gridtype).generate(tmp_path)
+        assert dest == tmp_path / filename
+        assert dest.is_symlink()
+        assert Path(dest).resolve() == hgrid_file.resolve()
 
 
 if __name__ == "__main__":

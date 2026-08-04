@@ -375,7 +375,8 @@ class GridLinker(GeneratorBase):
         if isinstance(self.hgrid, DataBlob):
             if not self.hgrid._copied:
                 self.hgrid.get(destdir, name="hgrid.gr3")
-            ref = self.hgrid._copied.name
+            # rompy DataBlob stores _copied as str, not Path
+            ref = Path(self.hgrid._copied).name
         else:
             ref = self.hgrid
         if self.gridtype == "hgridll":
