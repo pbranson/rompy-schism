@@ -23,7 +23,14 @@ classifiers = [
 ]
 license = { text = "Apache Software License 2.0" }
 requires-python = ">=3.10"
-dependencies = ["rompy>=0.6", "pydantic>2", "pylibs-ocean", "pytmd==2.2.9.1"]
+dependencies = [
+    "rompy>=0.6",
+    "pydantic>2",
+    "pylibs-ocean",
+    # 2.2.x has pyTMD.arguments; 3.x renamed that module to constituents.
+    # bctides.py accepts both via a try/except import.
+    "pytmd>=2.2.9.1,<4",
+]
 
 dynamic = ["version"]
 
