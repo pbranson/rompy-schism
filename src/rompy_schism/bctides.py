@@ -17,6 +17,12 @@ from rompy.logging import get_logger
 
 logger = get_logger(__name__)
 
+# pyTMD 3 renamed arguments → constituents; keep both import paths.
+try:
+    import pyTMD.arguments as _tmd_args
+except ImportError:  # pragma: no cover - exercised under pyTMD ≥ 3
+    import pyTMD.constituents as _tmd_args
+
 
 class Bctides:
     """Direct implementation of SCHISM tidal boundary conditions using PyLibs.
@@ -208,17 +214,17 @@ class Bctides:
         if self.tidal_model.startswith("FES"):
             # FES models use ASTRO5 method
             s, h, p, n, pp = pyTMD.astro.mean_longitudes(MJD, method="ASTRO5")
-            u, f = pyTMD.arguments.nodal_modulation(
+            u, f = _tmd_args.nodal_modulation(
                 n, p, self.tnames, corrections="FES"
             )
-            freq = pyTMD.arguments.frequency(self.tnames, corrections="FES")
+            freq = _tmd_args.frequency(self.tnames, corrections="FES")
         else:
             # Other models use ASTRO2 method
             s, h, p, n, pp = pyTMD.astro.mean_longitudes(MJD, method="Cartwright")
-            u, f = pyTMD.arguments.nodal_modulation(
+            u, f = _tmd_args.nodal_modulation(
                 n, p, self.tnames, corrections="OTIS"
             )
-            freq = pyTMD.arguments.frequency(self.tnames, corrections="OTIS")
+            freq = _tmd_args.frequency(self.tnames, corrections="OTIS")
 
         # Nodal corrections (u: phase, f: factor)
         u = u.squeeze()
@@ -230,7 +236,7 @@ class Bctides:
         tau = 15.0 * hour - s + h
         k = 90.0 + np.zeros_like(MJD)
         fargs = np.c_[tau, s, h, p, n, pp, k]
-        coef = pyTMD.arguments.coefficients_table(self.tnames)
+        coef = _tmd_args.coefficients_table(self.tnames)
         G = np.mod(np.dot(fargs, coef), 360.0)
 
         # Compose info
@@ -240,7 +246,7 @@ class Bctides:
         self.nodal_phase_correction = []
         self.species = []
         for c, constituent in enumerate(self.tnames):
-            params = pyTMD.arguments._constituent_parameters(constituent)
+            params = _tmd_args._constituent_parameters(constituent)
             self.amp.append(params[0])
             self.freq.append(freq[c])
             self.nodal_factor.append(f[c])
