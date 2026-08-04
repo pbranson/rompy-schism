@@ -257,7 +257,12 @@ class Bctides:
 
     def _interpolate_tidal_data(self, lons, lats, constituents, data_type="h"):
         """
-        Interpolate tidal data for a constituent to boundary points using pyTMD extract_constants.
+        Interpolate tidal harmonics to boundary points via pyTMD.
+
+        Supports pyTMD 2.x (``elevation`` / ``extract_constants``) and pyTMD 3.x
+        (``from_database`` / ``open_dataset`` / ``tmd.interp``). On 3.x, passes
+        a caller-expanded ``bounds`` box when the installed FES reader accepts
+        it (windowed netCDF hyperslab).
 
         Parameters
         ----------
@@ -265,43 +270,58 @@ class Bctides:
             Longitude values of boundary points
         lats : array
             Latitude values of boundary points
-        constituent : str
-            Tidal constituent name
+        constituents : list
+            Tidal constituent names
         data_type : str
             'h' for elevation, 'uv' for velocity
 
         Returns
         -------
         np.ndarray
-            For elevation: [amp, pha] (shape: n_points, 2)
-            For velocity: [u_amp, u_pha, v_amp, v_pha] (shape: n_points, 4)
+            For elevation: [amp, pha] (shape: n_points, n_constituents, 2)
+            For velocity: [u_amp, u_pha, v_amp, v_pha]
+            (shape: n_points, n_constituents, 4)
         """
+        lons = np.atleast_1d(np.asarray(lons, dtype=float))
+        lats = np.atleast_1d(np.asarray(lats, dtype=float))
         tmd_model = pyTMD.io.model(
             self.tidal_database,
             extra_databases=self.extra_databases,
-            constituents=constituents,
         )
+        # pyTMD 2.x had model.elevation / model.current; 3.x removed them.
+        if hasattr(tmd_model, "elevation"):
+            return self._interpolate_tidal_data_v2(
+                tmd_model, lons, lats, constituents, data_type
+            )
+        return self._interpolate_tidal_data_v3(
+            tmd_model, lons, lats, constituents, data_type
+        )
+
+    def _interpolate_tidal_data_v2(
+        self, tmd_model, lons, lats, constituents, data_type
+    ):
+        """pyTMD 2.x extract_constants path."""
+        method = self.tide_interpolation_method or "bilinear"
         if data_type == "h":
             amp, pha, _ = tmd_model.elevation(self.tidal_model).extract_constants(
                 lons,
                 lats,
                 constituents=constituents,
-                method="bilinear",
+                method=method,
                 crop=True,
                 extrapolate=self.extrapolate_tides,
                 cutoff=self.extrapolation_distance,
             )
             amp = amp.squeeze()[..., None]
             pha = pha.squeeze()[..., None]
-            # Return shape (n_points, 2)
             return np.concatenate((amp, pha), axis=-1)
-        elif data_type == "uv":
+        if data_type == "uv":
             amp_u, pha_u, _ = tmd_model.current(self.tidal_model).extract_constants(
                 lons,
                 lats,
                 type="u",
                 constituents=constituents,
-                method="bilinear",
+                method=method,
                 crop=True,
                 extrapolate=self.extrapolate_tides,
                 cutoff=self.extrapolation_distance,
@@ -311,23 +331,120 @@ class Bctides:
                 lats,
                 type="v",
                 constituents=constituents,
-                method="bilinear",
+                method=method,
                 crop=True,
                 extrapolate=self.extrapolate_tides,
                 cutoff=self.extrapolation_distance,
             )
-            amp_u = (amp_u.squeeze() / 100)[
-                ..., None
-            ]  # Convert cm/s to m/s - pyTMD always returns in cm/s
+            # pyTMD currents are cm/s; SCHISM expects m/s
+            amp_u = (amp_u.squeeze() / 100)[..., None]
             pha_u = pha_u.squeeze()[..., None]
-            amp_v = (amp_v.squeeze() / 100)[
-                ..., None
-            ]  # Convert cm/s to m/s - pyTMD always returns in cm/s
+            amp_v = (amp_v.squeeze() / 100)[..., None]
             pha_v = pha_v.squeeze()[..., None]
-            # Return shape (n_points, 4)
             return np.concatenate((amp_u, pha_u, amp_v, pha_v), axis=-1)
-        else:
-            raise ValueError(f"Unknown data_type: {data_type}")
+        raise ValueError(f"Unknown data_type: {data_type}")
+
+    def _bounds_for_points(self, lons, lats):
+        """Expand point envelope by ~extrapolation_distance (degrees, approx)."""
+        # ~111 km per degree latitude; pad at least half a degree for interp halo
+        pad = max(0.5, float(self.extrapolation_distance) / 111.0)
+        return [
+            float(np.min(lons) - pad),
+            float(np.max(lons) + pad),
+            float(np.min(lats) - pad),
+            float(np.max(lats) + pad),
+        ]
+
+    @staticmethod
+    def _resolve_constituent_key(ds, name):
+        """Match requested constituent name to a dataset variable."""
+        if name in ds:
+            return name
+        lower = {k.lower(): k for k in ds.data_vars}
+        key = lower.get(str(name).lower())
+        if key is None:
+            raise KeyError(
+                f"Constituent {name!r} not in model dataset "
+                f"({list(ds.data_vars)[:8]}…)"
+            )
+        return key
+
+    def _interp_group_v3(self, model, group, lons, lats, constituents, bounds):
+        """Open one FES group, interp amp/phase → (n_points, n_cons) each."""
+        # open_dataset's reduce_constituents defaults to group "z"; reduce
+        # the requested group explicitly (needed for u/v).
+        model.reduce_constituents(list(constituents), group=group)
+        open_kwargs = {
+            "group": group,
+            "constituents": list(constituents),
+        }
+        if bounds is not None:
+            open_kwargs["bounds"] = bounds
+        ds = model.open_dataset(**open_kwargs)
+        # If FES reader ignored bounds (older pyTMD), crop afterward.
+        if bounds is not None:
+            nx = int(ds.sizes.get("x", 0) or 0)
+            if nx > 2000:
+                logger.warning(
+                    "pyTMD FES open ignored bounds (full grid x=%s); "
+                    "cropping in memory. Install local pyTMD with "
+                    "windowed open_fes_netcdf for performance.",
+                    nx,
+                )
+                ds = ds.tmd.crop(bounds, buffer=0)
+
+        # xarray multi-dim interp only supports linear/nearest (not spline/bilinear)
+        method = (self.tide_interpolation_method or "linear").lower()
+        if method in {"bilinear", "spline", "linear"}:
+            method = "linear"
+        elif method != "nearest":
+            logger.warning(
+                "Unknown tide_interpolation_method %r for pyTMD 3; using linear",
+                method,
+            )
+            method = "linear"
+        X, Y = ds.tmd.coords_as(lons, lats, type="drift", crs=4326)
+        local = ds.tmd.interp(
+            X,
+            Y,
+            method=method,
+            extrapolate=self.extrapolate_tides,
+            cutoff=self.extrapolation_distance,
+        )
+        npts = lons.size
+        ncons = len(constituents)
+        amp = np.empty((npts, ncons), dtype=float)
+        pha = np.empty((npts, ncons), dtype=float)
+        for i, name in enumerate(constituents):
+            key = self._resolve_constituent_key(local, name)
+            amp[:, i] = np.asarray(local[key].tmd.amplitude).reshape(-1)
+            pha[:, i] = np.asarray(local[key].tmd.phase).reshape(-1)
+        return amp, pha
+
+    def _interpolate_tidal_data_v3(
+        self, tmd_model, lons, lats, constituents, data_type
+    ):
+        """pyTMD 3.x open_dataset + tmd.interp path."""
+        # Load z+u+v metadata so velocity groups are available when needed.
+        model = tmd_model.from_database(self.tidal_model, group=("z", "u", "v"))
+        bounds = self._bounds_for_points(lons, lats)
+        if data_type == "h":
+            amp, pha = self._interp_group_v3(
+                model, "z", lons, lats, constituents, bounds
+            )
+            return np.stack([amp, pha], axis=-1)
+        if data_type == "uv":
+            amp_u, pha_u = self._interp_group_v3(
+                model, "u", lons, lats, constituents, bounds
+            )
+            amp_v, pha_v = self._interp_group_v3(
+                model, "v", lons, lats, constituents, bounds
+            )
+            # default units for currents remain cm/s → m/s for SCHISM
+            amp_u = amp_u / 100.0
+            amp_v = amp_v / 100.0
+            return np.stack([amp_u, pha_u, amp_v, pha_v], axis=-1)
+        raise ValueError(f"Unknown data_type: {data_type}")
 
     def write_bctides(self, output_file):
         """Generate bctides.in file directly using PyLibs approach.
