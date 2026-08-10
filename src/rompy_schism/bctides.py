@@ -260,9 +260,9 @@ class Bctides:
         Interpolate tidal harmonics to boundary points via pyTMD.
 
         Supports pyTMD 2.x (``elevation`` / ``extract_constants``) and pyTMD 3.x
-        (``from_database`` / ``open_dataset`` / ``tmd.interp``). On 3.x, passes
-        a caller-expanded ``bounds`` box when the installed FES reader accepts
-        it (windowed netCDF hyperslab).
+        (``from_database`` / ``open_dataset`` / ``tmd.interp``). On 3.x, opens
+        with ``chunks='auto'`` then ``Dataset.tmd.crop`` on a caller-expanded
+        bounds box (lazy hyperslab; no open-time ``bounds`` kwarg).
 
         Parameters
         ----------
@@ -374,24 +374,14 @@ class Bctides:
         # open_dataset's reduce_constituents defaults to group "z"; reduce
         # the requested group explicitly (needed for u/v).
         model.reduce_constituents(list(constituents), group=group)
-        open_kwargs = {
-            "group": group,
-            "constituents": list(constituents),
-        }
+        # pyTMD FES: chunked open + tmd.crop (no open-time bounds kwarg).
+        ds = model.open_dataset(
+            group=group,
+            constituents=list(constituents),
+            chunks="auto",
+        )
         if bounds is not None:
-            open_kwargs["bounds"] = bounds
-        ds = model.open_dataset(**open_kwargs)
-        # If FES reader ignored bounds (older pyTMD), crop afterward.
-        if bounds is not None:
-            nx = int(ds.sizes.get("x", 0) or 0)
-            if nx > 2000:
-                logger.warning(
-                    "pyTMD FES open ignored bounds (full grid x=%s); "
-                    "cropping in memory. Install local pyTMD with "
-                    "windowed open_fes_netcdf for performance.",
-                    nx,
-                )
-                ds = ds.tmd.crop(bounds, buffer=0)
+            ds = ds.tmd.crop(bounds, buffer=0)
 
         # xarray multi-dim interp only supports linear/nearest (not spline/bilinear)
         method = (self.tide_interpolation_method or "linear").lower()
