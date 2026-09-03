@@ -27,9 +27,9 @@ dependencies = [
     "rompy>=0.6",
     "pydantic>2",
     "pylibs-ocean",
-    # 2.2.x has pyTMD.arguments; 3.x renamed that module to constituents.
-    # bctides.py accepts both via a try/except import.
-    "pytmd>=2.2.9.1,<4",
+    # pyTMD 3: constituents (not arguments); extra_databases JSON is
+    # model-name keyed with z/u/v groups. pyTMD 2 overlays will not load.
+    "pytmd>=3,<4",
 ]
 
 dynamic = ["version"]

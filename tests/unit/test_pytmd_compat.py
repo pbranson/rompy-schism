@@ -1,14 +1,21 @@
-"""pyTMD 2.x / 3.x import compatibility for bctides."""
+"""pyTMD 3 tidal BC: constituents import, overlay JSON, interpolate path."""
 
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+import pyTMD.constituents
+from pyTMD.io.model import load_database
 
 pytest.importorskip("pyTMD")
 pytest.importorskip("rompy_schism")
+
+_OVERLAY = (
+    Path(__file__).resolve().parents[1] / "test_data" / "tides" / "database.json"
+)
 
 
 class _LocalAmpPhase:
@@ -33,16 +40,11 @@ class _LocalAmpPhase:
         return self._data[key]
 
 
-def test_tmd_args_module_exposes_bctides_api():
-    """bctides imports _tmd_args from arguments (2.x) or constituents (3.x)."""
+def test_bctides_imports_constituents():
+    """bctides uses pyTMD.constituents (pyTMD 3); no arguments fallback."""
     from rompy_schism import bctides
 
-    try:
-        import pyTMD.arguments as expected
-    except ImportError:
-        import pyTMD.constituents as expected
-
-    assert bctides._tmd_args is expected
+    assert bctides._tmd_args is pyTMD.constituents
     for name in (
         "nodal_modulation",
         "frequency",
@@ -50,10 +52,20 @@ def test_tmd_args_module_exposes_bctides_api():
         "_constituent_parameters",
     ):
         assert hasattr(bctides._tmd_args, name), name
+    assert not hasattr(bctides.Bctides, "_interpolate_tidal_data_v2")
+
+
+def test_fixture_overlay_lists_oceanum_atlas():
+    """Test extra_databases JSON is pyTMD 3 (model-name keys, z/u/v groups)."""
+    params = load_database(extra_databases=[_OVERLAY])
+    assert "OCEANUM-atlas" in list(params.keys())
+    model = params["OCEANUM-atlas"]
+    for group in ("z", "u", "v"):
+        assert group in model, group
 
 
 def test_get_tidal_factors_m2_fes():
-    """Issue #10 call sites run on the installed pyTMD (arguments or constituents)."""
+    """Nodal/frequency call sites run on pyTMD.constituents."""
     from rompy_schism.bctides import Bctides
 
     bc = Bctides.__new__(Bctides)
@@ -67,8 +79,8 @@ def test_get_tidal_factors_m2_fes():
     assert bc.nodal_factor[0] > 0
 
 
-def test_interp_group_v3_opens_chunked_then_crops():
-    """pyTMD regional path: chunks at open, then tmd.crop(bounds)."""
+def test_interp_group_opens_chunked_then_crops():
+    """Regional path: chunks at open, then tmd.crop(bounds)."""
     from rompy_schism import bctides
     from rompy_schism.bctides import Bctides
 
@@ -94,7 +106,7 @@ def test_interp_group_v3_opens_chunked_then_crops():
     model = MagicMock()
     model.open_dataset.return_value = opened
 
-    amp, pha = bc._interp_group_v3(model, "z", lons, lats, cons, bounds)
+    amp, pha = bc._interp_group(model, "z", lons, lats, cons, bounds)
 
     model.reduce_constituents.assert_called_once_with(cons, group="z")
     model.open_dataset.assert_called_once_with(
@@ -107,11 +119,13 @@ def test_interp_group_v3_opens_chunked_then_crops():
     np.testing.assert_array_equal(pha, np.zeros((2, 1)))
 
 
-def test_v3_elevation_from_database_z_only():
+def test_elevation_from_database_z_only():
     """Elevation-only extracts must not require u/v model files."""
     from rompy_schism.bctides import Bctides
 
     bc = Bctides.__new__(Bctides)
+    bc.tidal_database = None
+    bc.extra_databases = []
     bc.tidal_model = "FES2014"
     bc.tide_interpolation_method = "linear"
     bc.extrapolate_tides = False
@@ -122,25 +136,27 @@ def test_v3_elevation_from_database_z_only():
     tmd_model.from_database.return_value = model
     amp = np.ones((2, 1))
     pha = np.zeros((2, 1))
-    bc._interp_group_v3 = MagicMock(return_value=(amp, pha))
+    bc._interp_group = MagicMock(return_value=(amp, pha))
 
-    out = bc._interpolate_tidal_data_v3(
-        tmd_model,
-        np.array([150.0, 151.0]),
-        np.array([-23.0, -24.0]),
-        ["m2"],
-        "h",
-    )
+    with patch("rompy_schism.bctides.pyTMD.io.model", return_value=tmd_model):
+        out = bc._interpolate_tidal_data(
+            np.array([150.0, 151.0]),
+            np.array([-23.0, -24.0]),
+            ["m2"],
+            "h",
+        )
 
     tmd_model.from_database.assert_called_once_with("FES2014", group=("z",))
     assert out.shape == (2, 1, 2)
 
 
-def test_v3_uv_from_database_zuv():
+def test_uv_from_database_zuv():
     """Velocity extracts still load z+u+v metadata."""
     from rompy_schism.bctides import Bctides
 
     bc = Bctides.__new__(Bctides)
+    bc.tidal_database = None
+    bc.extra_databases = []
     bc.tidal_model = "FES2014"
     bc.tide_interpolation_method = "linear"
     bc.extrapolate_tides = False
@@ -151,15 +167,15 @@ def test_v3_uv_from_database_zuv():
     tmd_model.from_database.return_value = model
     amp = np.ones((2, 1))
     pha = np.zeros((2, 1))
-    bc._interp_group_v3 = MagicMock(return_value=(amp, pha))
+    bc._interp_group = MagicMock(return_value=(amp, pha))
 
-    out = bc._interpolate_tidal_data_v3(
-        tmd_model,
-        np.array([150.0, 151.0]),
-        np.array([-23.0, -24.0]),
-        ["m2"],
-        "uv",
-    )
+    with patch("rompy_schism.bctides.pyTMD.io.model", return_value=tmd_model):
+        out = bc._interpolate_tidal_data(
+            np.array([150.0, 151.0]),
+            np.array([-23.0, -24.0]),
+            ["m2"],
+            "uv",
+        )
 
     tmd_model.from_database.assert_called_once_with(
         "FES2014", group=("z", "u", "v")

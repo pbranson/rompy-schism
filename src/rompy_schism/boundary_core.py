@@ -104,7 +104,10 @@ class TidalSpecies(IntEnum):
 class TidalDataset(BaseModel):
     """
     This class is used to define the tidal dataset to use from an available pyTMD tidal database.
-    Custom databases can be configured by providing a database.json file in the tidal database directory.
+    Custom databases can be configured by providing a database.json file in the
+    tidal database directory. The JSON must be pyTMD 3 layout: top-level model
+    names, each with ``z`` / ``u`` / ``v`` groups (not the pyTMD 2
+    ``elevation`` / ``current`` nesting).
     see https://pytmd.readthedocs.io/en/latest/getting_started/Getting-Started.html
     """
 

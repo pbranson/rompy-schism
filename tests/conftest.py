@@ -30,6 +30,7 @@ from rompy_schism.vgrid import VGrid as SchismVGrid
 DATA_REPO = "rom-py/rompy-test-data"
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 GITHUB_API_RELEASES = f"https://api.github.com/repos/{DATA_REPO}/releases/latest"
+_PYTMD3_TIDE_OVERLAY = Path(__file__).parent / "test_data" / "tides" / "database.json"
 
 # Add the tests directory to the Python path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -156,6 +157,15 @@ def download_and_extract_data():
     print("Test data downloaded and extracted.")
 
 
+def _stamp_pytmd3_tide_overlay():
+    """Replace rompy-test-data's pyTMD 2 JSON with the tracked pyTMD 3 overlay."""
+    if not _PYTMD3_TIDE_OVERLAY.exists():
+        return
+    dest_dir = Path(DATA_DIR) / "schism" / "tides"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(_PYTMD3_TIDE_OVERLAY, dest_dir / "database.json")
+
+
 # Only download if data dir is missing or empty
 if not os.path.exists(DATA_DIR) or not os.listdir(DATA_DIR):
     try:
@@ -163,7 +173,8 @@ if not os.path.exists(DATA_DIR) or not os.listdir(DATA_DIR):
     except Exception as e:
         print(f"Failed to download test data: {e}", file=sys.stderr)
         sys.exit(1)
-    # --- END: Automatic test data download ---
+
+_stamp_pytmd3_tide_overlay()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -331,6 +342,9 @@ def tidal_data_files(test_files_dir):
             logger.info(f"Unpacking {tidal_database / 'oceanum-atlas.tar.gz'}")
             with tarfile.open(tidal_database / "oceanum-atlas.tar.gz") as tar:
                 tar.extractall(path=tidal_database)
+    overlay = _PYTMD3_TIDE_OVERLAY
+    tidal_database.mkdir(parents=True, exist_ok=True)
+    shutil.copy(overlay, tidal_database / "database.json")
     return tidal_database
 
 
