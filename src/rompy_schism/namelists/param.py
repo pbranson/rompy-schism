@@ -54,6 +54,13 @@ class Core(NamelistBaseModel):
         2,
         description="Number of vertical bins for vegetation model. Only used if iveg=1.",
     )
+    nmarsh_types: Optional[int] = Field(
+        2,
+        description=(
+            "Number of marsh types (CORE). Required by SCHISM ≥ v5.12 even when "
+            "USE_MARSH is off; sample_inputs use 2."
+        ),
+    )
 
     @field_validator("ipre")
     @classmethod
@@ -144,6 +151,20 @@ class Core(NamelistBaseModel):
     def validate_ihfskip(cls, v):
         if v <= 0:
             raise ValueError("ihfskip must be positive")
+        return v
+
+    @field_validator("nbins_veg_vert")
+    @classmethod
+    def validate_nbins_veg_vert(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("nbins_veg_vert must be positive")
+        return v
+
+    @field_validator("nmarsh_types")
+    @classmethod
+    def validate_nmarsh_types(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("nmarsh_types must be positive")
         return v
 
     @model_validator(mode="after")
@@ -436,14 +457,16 @@ class Opt(NamelistBaseModel):
         description="only used if nws=-1: hurricane model type (1: Holland; 10: GAHM)",
     )
     ihconsv: Optional[int] = Field(0, description="heat exchange option")
-    isconsv: Optional[int] = Field(0, description="evaporation/precipitation model")
+    # isconsv removed in SCHISM ≥ v5.12 (derived from PREC_EVAP at compile time)
     i_hmin_airsea_ex: Optional[int] = Field(2, description="no effect if ihconsv=0")
     hmin_airsea_ex: Optional[float] = Field(
         0.2, description="[m], no effect if ihconsv=0"
     )
-    i_hmin_salt_ex: Optional[int] = Field(2, description="no effect if isconsv=0")
+    i_hmin_salt_ex: Optional[int] = Field(
+        2, description="no effect if PREC_EVAP is off"
+    )
     hmin_salt_ex: Optional[float] = Field(
-        0.2, description="[m], no effect if isconsv=0"
+        0.2, description="[m], no effect if PREC_EVAP is off"
     )
     iprecip_off_bnd: Optional[int] = Field(
         0, description="if /=0, precip will be turned off near land bnd"
