@@ -1,5 +1,6 @@
 # This file was auto generated from a SCHISM namelist file on 2025-01-24.
 
+import warnings
 from typing import List, Optional
 
 from pydantic import Field, field_validator, model_validator
@@ -175,6 +176,22 @@ class Core(NamelistBaseModel):
 
 
 class Opt(NamelistBaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def drop_removed_isconsv(cls, values):
+        if not isinstance(values, dict) or "isconsv" not in values:
+            return values
+        values = dict(values)
+        raw = values.pop("isconsv")
+        if raw not in (0, None, "0", False):
+            warnings.warn(
+                "opt.isconsv is ignored; SCHISM ≥ v5.12 derives precip/evap "
+                "from PREC_EVAP at compile time",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return values
+
     ipre2: Optional[int] = Field(
         0,
         description="Pre-processing flag for diagnostic outputs. If non-zero, the code will output drag coefficients (Cdp) and stop.",
