@@ -23,6 +23,13 @@ try:
 except ImportError:  # pragma: no cover - exercised under pyTMD ≥ 3
     import pyTMD.constituents as _tmd_args
 
+try:
+    import dask  # noqa: F401
+
+    _OPEN_CHUNKS = "auto"
+except ImportError:  # pragma: no cover - xarray chunks need dask
+    _OPEN_CHUNKS = None
+
 
 class Bctides:
     """Direct implementation of SCHISM tidal boundary conditions using PyLibs.
@@ -227,8 +234,8 @@ class Bctides:
             freq = _tmd_args.frequency(self.tnames, corrections="OTIS")
 
         # Nodal corrections (u: phase, f: factor)
-        u = u.squeeze()
-        f = f.squeeze()
+        u = np.atleast_1d(np.squeeze(u))
+        f = np.atleast_1d(np.squeeze(f))
         u_deg = np.rad2deg(u)
 
         # Earth equilibrium argument
@@ -378,16 +385,21 @@ class Bctides:
         ds = model.open_dataset(
             group=group,
             constituents=list(constituents),
-            chunks="auto",
+            chunks=_OPEN_CHUNKS,
         )
         if bounds is not None:
             ds = ds.tmd.crop(bounds, buffer=0)
 
         # xarray multi-dim interp only supports linear/nearest (not spline/bilinear)
         method = (self.tide_interpolation_method or "linear").lower()
-        if method in {"bilinear", "spline", "linear"}:
+        if method in {"bilinear", "spline"}:
+            logger.warning(
+                "tide_interpolation_method %r is not supported by pyTMD 3 "
+                "xarray interp; using linear",
+                method,
+            )
             method = "linear"
-        elif method != "nearest":
+        elif method != "linear" and method != "nearest":
             logger.warning(
                 "Unknown tide_interpolation_method %r for pyTMD 3; using linear",
                 method,
@@ -415,8 +427,9 @@ class Bctides:
         self, tmd_model, lons, lats, constituents, data_type
     ):
         """pyTMD 3.x open_dataset + tmd.interp path."""
-        # Load z+u+v metadata so velocity groups are available when needed.
-        model = tmd_model.from_database(self.tidal_model, group=("z", "u", "v"))
+        # Elevation-only databases have no u/v files; pathfinder would FileNotFound.
+        groups = ("z", "u", "v") if data_type == "uv" else ("z",)
+        model = tmd_model.from_database(self.tidal_model, group=groups)
         bounds = self._bounds_for_points(lons, lats)
         if data_type == "h":
             amp, pha = self._interp_group_v3(
