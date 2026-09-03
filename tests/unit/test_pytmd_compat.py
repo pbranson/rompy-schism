@@ -14,6 +14,12 @@ def test_tmd_args_module_exposes_bctides_api():
     """bctides imports _tmd_args from arguments (2.x) or constituents (3.x)."""
     from rompy_schism import bctides
 
+    try:
+        import pyTMD.arguments as expected
+    except ImportError:
+        import pyTMD.constituents as expected
+
+    assert bctides._tmd_args is expected
     for name in (
         "nodal_modulation",
         "frequency",
