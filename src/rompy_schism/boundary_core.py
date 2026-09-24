@@ -52,6 +52,7 @@ from rompy.core.boundary import DataBoundary
 from rompy.logging import get_logger
 
 from .bctides import Bctides
+from .bctides import normalize_tide_interpolation_method as _normalize_tide_method
 
 # Import from local modules
 from .boundary import BoundaryData
@@ -149,19 +150,53 @@ class TidalDataset(BaseModel):
         description="Apply nodal corrections to tidal constituents",
     )
 
-    tide_interpolation_method: str = Field(
+    tide_interpolation_method: Literal["bilinear", "linear", "nearest"] = Field(
         default="bilinear",
-        description="Method for tidal interpolation. see https://pytmd.readthedocs.io/en/latest/api_reference/interpolate.html.",
+        description=(
+            "How tidal harmonics are interpolated onto boundary nodes. "
+            "Supported values: 'bilinear' (default), 'linear', 'nearest'. "
+            "pyTMD 3 Dataset.tmd.interp on a regular grid only accepts the "
+            "xarray methods 'linear' and 'nearest'; those names are passed "
+            "through and do not fill masked cells. 'bilinear' is the "
+            "historical name for xarray 'linear' after Dataset.tmd.inpaint "
+            "(see tide_inpaint_iterations), which keeps wet coastal nodes "
+            "next to masked cells finite. 'spline' is deprecated, warns, "
+            "and is stored as 'bilinear'. pyTMD 3 has no spline interpolator."
+        ),
+    )
+
+    tide_inpaint_iterations: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Iteration count N passed to pyTMD Dataset.tmd.inpaint "
+            "(pyTMD.interpolate.inpaint) when tide_interpolation_method is "
+            "'bilinear'. 0 (default, and pyTMD's default) fills masked "
+            "model cells with the nearest finite node. N>0 runs that many "
+            "DCT penalized least-squares iterations after the "
+            "nearest-neighbor seed. Ignored for 'linear' and 'nearest'."
+        ),
     )
 
     extrapolate_tides: bool = Field(
         default=False,
-        description="Extrapolate tidal constituents outside the domain. If False, will raise an error if any constituent is outside the domain.",
+        description=(
+            "After interpolation, fill harmonics that are still outside the "
+            "tide model using pyTMD nearest neighbors within "
+            "extrapolation_distance kilometres. If False, non-finite "
+            "harmonics raise instead of being written to bctides.in. "
+            "Masked cells next to wet nodes are handled by 'bilinear', "
+            "not by this flag."
+        ),
     )
 
     extrapolation_distance: float = Field(
         default=50.0,
-        description="Distance in kilometre to extrapolate tidal constituents outside the tidal model. Only used if extrapolate_tides is True.",
+        description=(
+            "Distance in kilometres. Pads the tide-model crop around "
+            "boundary nodes (at least 0.5 degrees) and, when "
+            "extrapolate_tides is True, limits pyTMD extrapolation."
+        ),
     )
 
     extra_databases: Optional[List[Path]] = Field(
@@ -208,6 +243,7 @@ class TidalDataset(BaseModel):
             "cutoff_depth": self.cutoff_depth,
             "nodal_corrections": self.nodal_corrections,
             "tide_interpolation_method": self.tide_interpolation_method,
+            "tide_inpaint_iterations": self.tide_inpaint_iterations,
             "extra_databases": extra_databases,
             "mean_dynamic_topography": self._mdt,
         }
@@ -243,6 +279,12 @@ class TidalDataset(BaseModel):
         elif isinstance(v, list):
             return [c.lower() if isinstance(c, str) else c for c in v]
         return v
+
+    @field_validator("tide_interpolation_method", mode="before")
+    @classmethod
+    def normalize_tide_interpolation_method(cls, v):
+        """Lower-case method names. Deprecated ``spline`` becomes ``bilinear``."""
+        return _normalize_tide_method(v, stacklevel=4)
 
     @field_validator(
         "tidal_potential", "nodal_corrections", "extrapolate_tides", mode="before"
@@ -763,6 +805,7 @@ class BoundaryHandler(BoundaryData):
             cutoff_depth=self.tidal_data.cutoff_depth,
             nodal_corrections=self.tidal_data.nodal_corrections,
             tide_interpolation_method=self.tidal_data.tide_interpolation_method,
+            tide_inpaint_iterations=self.tidal_data.tide_inpaint_iterations,
             extrapolate_tides=self.tidal_data.extrapolate_tides,
             extrapolation_distance=self.tidal_data.extrapolation_distance,
             extra_databases=self.tidal_data.extra_databases,
