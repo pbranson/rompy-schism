@@ -115,6 +115,44 @@ def test_interp_group_opens_chunked_then_crops():
         chunks=bctides._OPEN_CHUNKS,
     )
     opened.tmd.crop.assert_called_once_with(bounds, buffer=0)
+    cropped.tmd.to_units.assert_not_called()
+    np.testing.assert_array_equal(amp, np.ones((2, 1)))
+    np.testing.assert_array_equal(pha, np.zeros((2, 1)))
+
+
+def test_interp_group_converts_currents_with_pytmd_units():
+    """u/v amplitudes are scaled by Dataset.tmd.to_units, not a later /100."""
+    from rompy_schism.bctides import Bctides
+
+    bc = Bctides.__new__(Bctides)
+    bc.tide_interpolation_method = "linear"
+    bc.extrapolate_tides = False
+    bc.extrapolation_distance = 0.0
+
+    cons = ["m2"]
+    lons = np.array([150.0, 151.0])
+    lats = np.array([-23.0, -24.0])
+    bounds = [149.0, 152.0, -25.0, -22.0]
+    # Amplitudes stand in for values already converted to m/s.
+    local = _LocalAmpPhase(cons, lons.size)
+
+    converted = MagicMock()
+    converted.tmd.coords_as.return_value = (lons, lats)
+    converted.tmd.interp.return_value = local
+
+    cropped = MagicMock()
+    cropped.tmd.to_units.return_value = converted
+
+    opened = MagicMock()
+    opened.tmd.crop.return_value = cropped
+
+    model = MagicMock()
+    model.open_dataset.return_value = opened
+
+    amp, pha = bc._interp_group(model, "u", lons, lats, cons, bounds)
+
+    cropped.tmd.to_units.assert_called_once_with("m/s")
+    converted.tmd.interp.assert_called_once()
     np.testing.assert_array_equal(amp, np.ones((2, 1)))
     np.testing.assert_array_equal(pha, np.zeros((2, 1)))
 
@@ -212,3 +250,6 @@ def test_uv_from_database_zuv():
         "FES2014", group=("z", "u", "v")
     )
     assert out.shape == (2, 1, 4)
+    # Conversion lives in _interp_group; the caller must not scale again.
+    np.testing.assert_array_equal(out[:, :, 0], amp)
+    np.testing.assert_array_equal(out[:, :, 2], amp)

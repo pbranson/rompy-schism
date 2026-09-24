@@ -279,8 +279,9 @@ class Bctides:
         Returns
         -------
         np.ndarray
-            For elevation: [amp, pha] (shape: n_points, n_constituents, 2)
-            For velocity: [u_amp, u_pha, v_amp, v_pha]
+            For elevation: [amp, pha] in meters
+            (shape: n_points, n_constituents, 2)
+            For velocity: [u_amp, u_pha, v_amp, v_pha] with amplitudes in m/s
             (shape: n_points, n_constituents, 4)
         """
         lons = np.atleast_1d(np.asarray(lons, dtype=float))
@@ -305,9 +306,6 @@ class Bctides:
             amp_v, pha_v = self._interp_group(
                 model, "v", lons, lats, constituents, bounds
             )
-            # default units for currents remain cm/s → m/s for SCHISM
-            amp_u = amp_u / 100.0
-            amp_v = amp_v / 100.0
             return np.stack([amp_u, pha_u, amp_v, pha_v], axis=-1)
         raise ValueError(f"Unknown data_type: {data_type}")
 
@@ -337,7 +335,12 @@ class Bctides:
         return key
 
     def _interp_group(self, model, group, lons, lats, constituents, bounds):
-        """Open one FES group, interp amp/phase → (n_points, n_cons) each."""
+        """Open one tide-model group and interpolate amplitude and phase.
+
+        ``open_dataset`` defaults currents to cm/s. SCHISM ``bctides.in``
+        wants m/s, so u/v groups are converted with ``Dataset.tmd.to_units``
+        (pyTMD pint). Elevation stays in the default meters.
+        """
         # open_dataset's reduce_constituents defaults to group "z"; reduce
         # the requested group explicitly (needed for u/v).
         model.reduce_constituents(list(constituents), group=group)
@@ -349,6 +352,8 @@ class Bctides:
         )
         if bounds is not None:
             ds = ds.tmd.crop(bounds, buffer=0)
+        if group in ("u", "v"):
+            ds = ds.tmd.to_units("m/s")
 
         # xarray multi-dim interp only supports linear/nearest (not spline/bilinear)
         method = (self.tide_interpolation_method or "linear").lower()
