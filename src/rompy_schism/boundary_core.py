@@ -151,7 +151,13 @@ class TidalDataset(BaseModel):
 
     tide_interpolation_method: str = Field(
         default="bilinear",
-        description="Method for tidal interpolation. see https://pytmd.readthedocs.io/en/latest/api_reference/interpolate.html.",
+        description=(
+            "Tidal interpolation method. 'bilinear' (default) and 'spline' "
+            "use pyTMD 3 xarray linear interpolation after nearest-neighbor "
+            "fill of masked model cells, so wet coastal nodes next to land "
+            "stay finite. 'linear' and 'nearest' are passed through without "
+            "that coastal fill. See pyTMD Dataset.tmd.interp / inpaint."
+        ),
     )
 
     extrapolate_tides: bool = Field(

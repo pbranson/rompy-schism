@@ -88,7 +88,11 @@ class Bctides:
         nodal_corrections : bool, optional
             Whether to apply nodal corrections, by default True
         tide_interpolation_method : str, optional
-            Method for tidal interpolation, by default 'bilinear'
+            Method for tidal interpolation, by default 'bilinear'.
+            ``bilinear`` and ``spline`` use xarray ``linear`` after a
+            nearest-neighbor fill of masked model cells, so wet coastal
+            nodes stay finite. ``linear`` and ``nearest`` are passed
+            through to pyTMD.
         ethconst : list, optional
             Constant elevation for each boundary
         vthconst : list, optional
@@ -298,16 +302,19 @@ class Bctides:
             amp, pha = self._interp_group(
                 model, "z", lons, lats, constituents, bounds
             )
-            return np.stack([amp, pha], axis=-1)
-        if data_type == "uv":
+            result = np.stack([amp, pha], axis=-1)
+        elif data_type == "uv":
             amp_u, pha_u = self._interp_group(
                 model, "u", lons, lats, constituents, bounds
             )
             amp_v, pha_v = self._interp_group(
                 model, "v", lons, lats, constituents, bounds
             )
-            return np.stack([amp_u, pha_u, amp_v, pha_v], axis=-1)
-        raise ValueError(f"Unknown data_type: {data_type}")
+            result = np.stack([amp_u, pha_u, amp_v, pha_v], axis=-1)
+        else:
+            raise ValueError(f"Unknown data_type: {data_type}")
+        self._require_finite_harmonics(result, data_type)
+        return result
 
     def _bounds_for_points(self, lons, lats):
         """Expand point envelope by ~extrapolation_distance (degrees, approx)."""
@@ -334,12 +341,84 @@ class Bctides:
             )
         return key
 
+    def _xarray_interp_method(self):
+        """Map the configured method onto pyTMD 3 / xarray.
+
+        Returns
+        -------
+        method : str
+            ``linear`` or ``nearest`` for ``Dataset.tmd.interp``.
+        coastal_fill : bool
+            When true, masked model cells are nearest-filled before interp.
+        """
+        method = (self.tide_interpolation_method or "linear").lower()
+        # pyTMD 2 bilinear kept any finite corner of the surrounding cell
+        # and renormalized its weights. xarray linear returns NaN if any
+        # corner is masked, which drops wet boundary nodes next to land.
+        # spline is the same situation: pyTMD 3 dropped that interpolator.
+        if method in {"bilinear", "spline"}:
+            return "linear", True
+        if method in {"linear", "nearest"}:
+            return method, False
+        logger.warning(
+            "Unknown tide_interpolation_method %r for pyTMD 3; using linear",
+            method,
+        )
+        return "linear", False
+
+    @staticmethod
+    def _compute_if_lazy(ds):
+        """Load a chunked dataset so in-memory inpaint can run."""
+        chunks = getattr(ds, "chunks", None)
+        try:
+            lazy = chunks is not None and len(chunks) > 0
+        except TypeError:
+            lazy = False
+        if lazy:
+            return ds.compute()
+        return ds
+
+    def _fill_masked_model_cells(self, ds):
+        """Nearest-fill masked tide-model cells inside the cropped window.
+
+        ``Dataset.tmd.inpaint(N=0)`` copies the nearest finite model node
+        into masked cells and leaves ocean cells unchanged. Interior
+        ``linear`` results therefore match a strict linear interpolate.
+        Coastal nodes whose stencil crosses land, and staggered u/v nodes
+        whose whole 2x2 cell is masked, still receive a finite value from
+        the nearest wet cell in the crop. That is the pyTMD 3 replacement
+        for pyTMD 2 bilinear at wet boundary nodes.
+        """
+        ds = self._compute_if_lazy(ds)
+        geographic = bool(ds.tmd.crs.is_geographic)
+        return ds.tmd.inpaint(N=0, is_geographic=geographic)
+
+    @staticmethod
+    def _require_finite_harmonics(result, data_type):
+        """Refuse to hand non-finite harmonics to ``bctides.in``."""
+        if np.isfinite(result).all():
+            return
+        node_bad = ~np.isfinite(result).reshape(result.shape[0], -1).all(axis=1)
+        n_bad = int(node_bad.sum())
+        raise ValueError(
+            f"{n_bad} boundary node(s) have non-finite {data_type} tidal "
+            "coefficients after interpolation. Refusing to write NaN into "
+            "bctides.in. Remaining nodes are outside the cropped tide model. "
+            "Set extrapolate_tides=True or increase extrapolation_distance."
+        )
+
     def _interp_group(self, model, group, lons, lats, constituents, bounds):
         """Open one tide-model group and interpolate amplitude and phase.
 
         ``open_dataset`` defaults currents to cm/s. SCHISM ``bctides.in``
         wants m/s, so u/v groups are converted with ``Dataset.tmd.to_units``
         (pyTMD pint). Elevation stays in the default meters.
+
+        ``bilinear`` (the historical default) and ``spline`` are applied as
+        xarray ``linear`` after :meth:`_fill_masked_model_cells`. Strict
+        ``linear`` / ``nearest`` do not fill masked cells. ``extrapolate_tides``
+        still controls pyTMD nearest/IDW fill of points that remain outside
+        the model grid, limited by ``extrapolation_distance`` kilometres.
         """
         # open_dataset's reduce_constituents defaults to group "z"; reduce
         # the requested group explicitly (needed for u/v).
@@ -355,21 +434,9 @@ class Bctides:
         if group in ("u", "v"):
             ds = ds.tmd.to_units("m/s")
 
-        # xarray multi-dim interp only supports linear/nearest (not spline/bilinear)
-        method = (self.tide_interpolation_method or "linear").lower()
-        if method in {"bilinear", "spline"}:
-            logger.warning(
-                "tide_interpolation_method %r is not supported by pyTMD 3 "
-                "xarray interp; using linear",
-                method,
-            )
-            method = "linear"
-        elif method != "linear" and method != "nearest":
-            logger.warning(
-                "Unknown tide_interpolation_method %r for pyTMD 3; using linear",
-                method,
-            )
-            method = "linear"
+        method, coastal_fill = self._xarray_interp_method()
+        if coastal_fill:
+            ds = self._fill_masked_model_cells(ds)
         X, Y = ds.tmd.coords_as(lons, lats, type="drift", crs=4326)
         local = ds.tmd.interp(
             X,

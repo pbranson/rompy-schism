@@ -153,8 +153,48 @@ def test_interp_group_converts_currents_with_pytmd_units():
 
     cropped.tmd.to_units.assert_called_once_with("m/s")
     converted.tmd.interp.assert_called_once()
+    cropped.tmd.inpaint.assert_not_called()
     np.testing.assert_array_equal(amp, np.ones((2, 1)))
     np.testing.assert_array_equal(pha, np.zeros((2, 1)))
+
+
+def test_bilinear_fills_masked_cells_before_linear():
+    """Legacy bilinear nearest-fills masked cells, then uses xarray linear."""
+    from rompy_schism.bctides import Bctides
+
+    bc = Bctides.__new__(Bctides)
+    bc.tide_interpolation_method = "bilinear"
+    bc.extrapolate_tides = False
+    bc.extrapolation_distance = 50.0
+
+    cons = ["m2"]
+    lons = np.array([152.2])
+    lats = np.array([-24.5])
+    bounds = [151.0, 153.0, -25.0, -24.0]
+
+    local = _LocalAmpPhase(cons, lons.size)
+    filled = MagicMock()
+    filled.tmd.coords_as.return_value = (lons, lats)
+    filled.tmd.interp.return_value = local
+
+    cropped = MagicMock()
+    cropped.chunks = {}
+    cropped.tmd.inpaint.return_value = filled
+
+    opened = MagicMock()
+    opened.tmd.crop.return_value = cropped
+
+    model = MagicMock()
+    model.open_dataset.return_value = opened
+
+    amp, pha = bc._interp_group(model, "z", lons, lats, cons, bounds)
+
+    cropped.tmd.inpaint.assert_called_once_with(N=0, is_geographic=True)
+    filled.tmd.interp.assert_called_once()
+    assert filled.tmd.interp.call_args.kwargs["method"] == "linear"
+    assert filled.tmd.interp.call_args.kwargs["extrapolate"] is False
+    np.testing.assert_array_equal(amp, np.ones((1, 1)))
+    np.testing.assert_array_equal(pha, np.zeros((1, 1)))
 
 
 @pytest.mark.parametrize("data_type", ["h", "uv"])
@@ -162,8 +202,9 @@ def test_oceanum_coastal_interpolation_is_finite(tidal_data_files, data_type):
     """Wet coastal nodes must not silently produce non-finite harmonics."""
     from rompy_schism.bctides import Bctides
 
-    # Grid node 2133 is finite with the pyTMD 2 bilinear path but becomes NaN
-    # when pyTMD 3 maps bilinear to xarray's masked-cell linear interpolation.
+    # Grid node 2133. xarray linear is NaN here: elevation has a masked
+    # corner, and the u stencil is entirely masked (nearest wet u ~52 km).
+    # bilinear nearest-fills those cells before linear interpolation.
     bc = Bctides(
         hgrid=None,
         constituents=["m2"],
