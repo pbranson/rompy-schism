@@ -43,6 +43,7 @@ class Bctides:
         cutoff_depth=50.0,
         nodal_corrections=True,
         tide_interpolation_method="bilinear",
+        tide_inpaint_iterations=0,
         extrapolate_tides=False,
         extrapolation_distance=100.0,
         extra_databases=[],
@@ -89,10 +90,15 @@ class Bctides:
             Whether to apply nodal corrections, by default True
         tide_interpolation_method : str, optional
             Method for tidal interpolation, by default 'bilinear'.
-            ``bilinear`` and ``spline`` use xarray ``linear`` after a
-            nearest-neighbor fill of masked model cells, so wet coastal
-            nodes stay finite. ``linear`` and ``nearest`` are passed
-            through to pyTMD.
+            ``linear`` and ``nearest`` match pyTMD 3 ``Dataset.tmd.interp``.
+            ``bilinear`` and ``spline`` are pyTMD 2 names: pyTMD 3 has no
+            bilinear or spline interpolator, so both become xarray ``linear``
+            after ``Dataset.tmd.inpaint``.
+        tide_inpaint_iterations : int, optional
+            ``N`` passed to ``Dataset.tmd.inpaint`` on the bilinear/spline
+            path. 0 (default) is nearest-neighbor fill. ``N > 0`` is that
+            many DCT penalized least-squares iterations. Ignored for
+            ``linear`` and ``nearest``.
         ethconst : list, optional
             Constant elevation for each boundary
         vthconst : list, optional
@@ -136,6 +142,7 @@ class Bctides:
         self.cutoff_depth = cutoff_depth
         self.nodal_corrections = nodal_corrections
         self.tide_interpolation_method = tide_interpolation_method
+        self.tide_inpaint_iterations = int(tide_inpaint_iterations)
         self.extrapolate_tides = extrapolate_tides
         self.extrapolation_distance = extrapolation_distance
         self.extra_databases = extra_databases
@@ -352,10 +359,12 @@ class Bctides:
             When true, masked model cells are nearest-filled before interp.
         """
         method = (self.tide_interpolation_method or "linear").lower()
-        # pyTMD 2 bilinear kept any finite corner of the surrounding cell
-        # and renormalized its weights. xarray linear returns NaN if any
-        # corner is masked, which drops wet boundary nodes next to land.
-        # spline is the same situation: pyTMD 3 dropped that interpolator.
+        # pyTMD 3 grid_interp forwards `method` to xarray Dataset.interp.
+        # On a 2-D grid that is only "linear" and "nearest".
+        # "bilinear" and "spline" are pyTMD 2 interpolate.* names. Those
+        # functions were removed in pyTMD 3. Both are kept as aliases:
+        # xarray linear after a masked-cell inpaint, because pyTMD 2
+        # bilinear used any finite corner instead of failing the cell.
         if method in {"bilinear", "spline"}:
             return "linear", True
         if method in {"linear", "nearest"}:
@@ -381,17 +390,22 @@ class Bctides:
     def _fill_masked_model_cells(self, ds):
         """Nearest-fill masked tide-model cells inside the cropped window.
 
-        ``Dataset.tmd.inpaint(N=0)`` copies the nearest finite model node
-        into masked cells and leaves ocean cells unchanged. Interior
-        ``linear`` results therefore match a strict linear interpolate.
-        Coastal nodes whose stencil crosses land, and staggered u/v nodes
-        whose whole 2x2 cell is masked, still receive a finite value from
-        the nearest wet cell in the crop. That is the pyTMD 3 replacement
-        for pyTMD 2 bilinear at wet boundary nodes.
+        ``Dataset.tmd.inpaint`` (``pyTMD.interpolate.inpaint``) copies the
+        nearest finite model node into masked cells and leaves ocean cells
+        unchanged. ``tide_inpaint_iterations`` is that function's ``N``:
+        0 is nearest neighbors only; ``N > 0`` continues with DCT
+        penalized least squares. Interior ``linear`` results therefore
+        match a strict linear interpolate when ``N`` is 0. Coastal nodes
+        whose stencil crosses land, and staggered u/v nodes whose whole
+        2x2 cell is masked, still receive a finite value from the nearest
+        wet cell in the crop.
         """
         ds = self._compute_if_lazy(ds)
         geographic = bool(ds.tmd.crs.is_geographic)
-        return ds.tmd.inpaint(N=0, is_geographic=geographic)
+        return ds.tmd.inpaint(
+            N=self.tide_inpaint_iterations,
+            is_geographic=geographic,
+        )
 
     @staticmethod
     def _require_finite_harmonics(result, data_type):

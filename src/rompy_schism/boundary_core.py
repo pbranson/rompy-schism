@@ -149,14 +149,33 @@ class TidalDataset(BaseModel):
         description="Apply nodal corrections to tidal constituents",
     )
 
-    tide_interpolation_method: str = Field(
-        default="bilinear",
+    tide_interpolation_method: Literal["bilinear", "spline", "linear", "nearest"] = (
+        Field(
+            default="bilinear",
+            description=(
+                "How tidal harmonics are interpolated onto boundary nodes. "
+                "pyTMD 3 Dataset.tmd.interp on a regular grid only accepts "
+                "the xarray methods 'linear' and 'nearest'; those two names "
+                "are passed through unchanged and do not fill masked cells. "
+                "'bilinear' (default) and 'spline' are pyTMD 2 names. pyTMD 3 "
+                "removed interpolate.bilinear and interpolate.spline, so both "
+                "are applied as xarray 'linear' after Dataset.tmd.inpaint "
+                "(see tide_inpaint_iterations) so wet coastal nodes next to "
+                "masked cells stay finite."
+            ),
+        )
+    )
+
+    tide_inpaint_iterations: int = Field(
+        default=0,
+        ge=0,
         description=(
-            "Tidal interpolation method. 'bilinear' (default) and 'spline' "
-            "use pyTMD 3 xarray linear interpolation after nearest-neighbor "
-            "fill of masked model cells, so wet coastal nodes next to land "
-            "stay finite. 'linear' and 'nearest' are passed through without "
-            "that coastal fill. See pyTMD Dataset.tmd.interp / inpaint."
+            "Iteration count N passed to pyTMD Dataset.tmd.inpaint "
+            "(pyTMD.interpolate.inpaint) when tide_interpolation_method is "
+            "'bilinear' or 'spline'. 0 (default, and pyTMD's default) fills "
+            "masked model cells with the nearest finite node. N>0 runs that "
+            "many DCT penalized least-squares iterations after the "
+            "nearest-neighbor seed. Ignored for 'linear' and 'nearest'."
         ),
     )
 
@@ -214,6 +233,7 @@ class TidalDataset(BaseModel):
             "cutoff_depth": self.cutoff_depth,
             "nodal_corrections": self.nodal_corrections,
             "tide_interpolation_method": self.tide_interpolation_method,
+            "tide_inpaint_iterations": self.tide_inpaint_iterations,
             "extra_databases": extra_databases,
             "mean_dynamic_topography": self._mdt,
         }
@@ -248,6 +268,14 @@ class TidalDataset(BaseModel):
                 return [c.strip().lower() for c in v.split(",")]
         elif isinstance(v, list):
             return [c.lower() if isinstance(c, str) else c for c in v]
+        return v
+
+    @field_validator("tide_interpolation_method", mode="before")
+    @classmethod
+    def normalize_tide_interpolation_method(cls, v):
+        """Accept the pyTMD 2/3 names, case-insensitively."""
+        if isinstance(v, str):
+            return v.strip().lower()
         return v
 
     @field_validator(
@@ -769,6 +797,7 @@ class BoundaryHandler(BoundaryData):
             cutoff_depth=self.tidal_data.cutoff_depth,
             nodal_corrections=self.tidal_data.nodal_corrections,
             tide_interpolation_method=self.tidal_data.tide_interpolation_method,
+            tide_inpaint_iterations=self.tidal_data.tide_inpaint_iterations,
             extrapolate_tides=self.tidal_data.extrapolate_tides,
             extrapolation_distance=self.tidal_data.extrapolation_distance,
             extra_databases=self.tidal_data.extra_databases,

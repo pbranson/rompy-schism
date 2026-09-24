@@ -158,12 +158,14 @@ def test_interp_group_converts_currents_with_pytmd_units():
     np.testing.assert_array_equal(pha, np.zeros((2, 1)))
 
 
-def test_bilinear_fills_masked_cells_before_linear():
-    """Legacy bilinear nearest-fills masked cells, then uses xarray linear."""
+@pytest.mark.parametrize("n_iter", [0, 4])
+def test_bilinear_fills_masked_cells_before_linear(n_iter):
+    """Legacy bilinear inpaints masked cells, then uses xarray linear."""
     from rompy_schism.bctides import Bctides
 
     bc = Bctides.__new__(Bctides)
     bc.tide_interpolation_method = "bilinear"
+    bc.tide_inpaint_iterations = n_iter
     bc.extrapolate_tides = False
     bc.extrapolation_distance = 50.0
 
@@ -189,12 +191,37 @@ def test_bilinear_fills_masked_cells_before_linear():
 
     amp, pha = bc._interp_group(model, "z", lons, lats, cons, bounds)
 
-    cropped.tmd.inpaint.assert_called_once_with(N=0, is_geographic=True)
+    cropped.tmd.inpaint.assert_called_once_with(
+        N=bc.tide_inpaint_iterations, is_geographic=True
+    )
     filled.tmd.interp.assert_called_once()
     assert filled.tmd.interp.call_args.kwargs["method"] == "linear"
     assert filled.tmd.interp.call_args.kwargs["extrapolate"] is False
     np.testing.assert_array_equal(amp, np.ones((1, 1)))
     np.testing.assert_array_equal(pha, np.zeros((1, 1)))
+
+
+def test_tide_inpaint_iterations_defaults_to_nearest_neighbor():
+    """N=0 is the pyTMD inpaint default and the TidalDataset/Bctides default."""
+    from rompy_schism.bctides import Bctides
+    from rompy_schism.boundary_core import TidalDataset
+
+    dataset = TidalDataset(tide_interpolation_method="Bilinear")
+    assert dataset.tide_interpolation_method == "bilinear"
+    assert dataset.tide_inpaint_iterations == 0
+
+    bc = Bctides(hgrid=None, constituents=["m2"])
+    assert bc.tide_inpaint_iterations == 0
+
+
+def test_tide_interpolation_method_rejects_unknown_names():
+    """Only the pyTMD 3 names plus the pyTMD 2 bilinear/spline aliases."""
+    from pydantic import ValidationError
+
+    from rompy_schism.boundary_core import TidalDataset
+
+    with pytest.raises(ValidationError):
+        TidalDataset(tide_interpolation_method="cubic")
 
 
 @pytest.mark.parametrize("data_type", ["h", "uv"])
