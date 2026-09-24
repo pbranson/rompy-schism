@@ -4,6 +4,7 @@ Tidal boundary conditions for SCHISM.
 A direct implementation based on PyLibs scripts/gen_bctides.py with no fallbacks.
 """
 
+import warnings
 from datetime import datetime
 
 import numpy as np
@@ -17,6 +18,35 @@ from rompy.formatting import ARROW
 from rompy.logging import get_logger
 
 logger = get_logger(__name__)
+
+# pyTMD 3 Dataset.tmd.interp on a regular grid accepts only these xarray methods.
+# "bilinear" is the historical default: xarray linear after a masked-cell inpaint.
+_TIDE_INTERP_METHODS = frozenset({"bilinear", "linear", "nearest"})
+_SPLINE_INTERP_DEPRECATION = (
+    "tide_interpolation_method 'spline' is deprecated and will be removed. "
+    "pyTMD 3 has no spline interpolator; 'spline' uses the same coastal-fill "
+    "linear path as 'bilinear'. Supported methods are 'bilinear' (default), "
+    "'linear', and 'nearest'."
+)
+
+
+def normalize_tide_interpolation_method(method, *, stacklevel=2):
+    """Lower-case a tide interpolation name and retire ``spline``.
+
+    ``spline`` warns and becomes ``bilinear``. ``None`` is returned unchanged
+    so callers can apply their own default.
+    """
+    if method is None:
+        return None
+    name = str(method).strip().lower()
+    if name == "spline":
+        warnings.warn(
+            _SPLINE_INTERP_DEPRECATION,
+            DeprecationWarning,
+            stacklevel=stacklevel,
+        )
+        return "bilinear"
+    return name
 
 try:
     import dask  # noqa: F401
@@ -45,7 +75,7 @@ class Bctides:
         tide_interpolation_method="bilinear",
         tide_inpaint_iterations=0,
         extrapolate_tides=False,
-        extrapolation_distance=100.0,
+        extrapolation_distance=50.0,
         extra_databases=[],
         mdt=None,
         ethconst=None,
@@ -89,16 +119,20 @@ class Bctides:
         nodal_corrections : bool, optional
             Whether to apply nodal corrections, by default True
         tide_interpolation_method : str, optional
-            Method for tidal interpolation, by default 'bilinear'.
+            ``'bilinear'`` (default), ``'linear'``, or ``'nearest'``.
             ``linear`` and ``nearest`` match pyTMD 3 ``Dataset.tmd.interp``.
-            ``bilinear`` and ``spline`` are pyTMD 2 names: pyTMD 3 has no
-            bilinear or spline interpolator, so both become xarray ``linear``
-            after ``Dataset.tmd.inpaint``.
+            ``bilinear`` is the historical name for xarray ``linear`` after
+            ``Dataset.tmd.inpaint``, so wet coastal nodes stay finite.
+            ``spline`` is deprecated and mapped to ``bilinear``.
         tide_inpaint_iterations : int, optional
-            ``N`` passed to ``Dataset.tmd.inpaint`` on the bilinear/spline
-            path. 0 (default) is nearest-neighbor fill. ``N > 0`` is that
-            many DCT penalized least-squares iterations. Ignored for
-            ``linear`` and ``nearest``.
+            ``N`` passed to ``Dataset.tmd.inpaint`` on the bilinear path.
+            0 (default) is nearest-neighbor fill. ``N > 0`` is that many
+            DCT penalized least-squares iterations. Ignored for ``linear``
+            and ``nearest``. Must be >= 0.
+        extrapolation_distance : float, optional
+            Kilometres. Pads the tide-model crop (at least half a degree)
+            and, when ``extrapolate_tides`` is True, limits pyTMD's
+            out-of-domain fill. Default 50, matching ``TidalDataset``.
         ethconst : list, optional
             Constant elevation for each boundary
         vthconst : list, optional
@@ -141,7 +175,11 @@ class Bctides:
         self.tidal_potential = tidal_potential
         self.cutoff_depth = cutoff_depth
         self.nodal_corrections = nodal_corrections
-        self.tide_interpolation_method = tide_interpolation_method
+        self.tide_interpolation_method = normalize_tide_interpolation_method(
+            tide_interpolation_method, stacklevel=3
+        )
+        if int(tide_inpaint_iterations) < 0:
+            raise ValueError("tide_inpaint_iterations must be >= 0")
         self.tide_inpaint_iterations = int(tide_inpaint_iterations)
         self.extrapolate_tides = extrapolate_tides
         self.extrapolation_distance = extrapolation_distance
@@ -358,20 +396,23 @@ class Bctides:
         coastal_fill : bool
             When true, masked model cells are nearest-filled before interp.
         """
-        method = (self.tide_interpolation_method or "linear").lower()
+        method = normalize_tide_interpolation_method(
+            self.tide_interpolation_method or "linear",
+            stacklevel=3,
+        )
         # pyTMD 3 grid_interp forwards `method` to xarray Dataset.interp.
-        # On a 2-D grid that is only "linear" and "nearest".
-        # "bilinear" and "spline" are pyTMD 2 interpolate.* names. Those
-        # functions were removed in pyTMD 3. Both are kept as aliases:
-        # xarray linear after a masked-cell inpaint, because pyTMD 2
-        # bilinear used any finite corner instead of failing the cell.
-        if method in {"bilinear", "spline"}:
+        # On a 2-D grid that is only "linear" and "nearest". "bilinear"
+        # is the legacy name for linear after a masked-cell inpaint:
+        # pyTMD 2 bilinear kept any finite corner instead of failing the cell.
+        if method == "bilinear":
             return "linear", True
         if method in {"linear", "nearest"}:
             return method, False
         logger.warning(
-            "Unknown tide_interpolation_method %r for pyTMD 3; using linear",
+            "Unknown tide_interpolation_method %r; supported values are "
+            "%s. Using linear without coastal fill.",
             method,
+            ", ".join(sorted(_TIDE_INTERP_METHODS)),
         )
         return "linear", False
 
@@ -428,11 +469,11 @@ class Bctides:
         wants m/s, so u/v groups are converted with ``Dataset.tmd.to_units``
         (pyTMD pint). Elevation stays in the default meters.
 
-        ``bilinear`` (the historical default) and ``spline`` are applied as
-        xarray ``linear`` after :meth:`_fill_masked_model_cells`. Strict
-        ``linear`` / ``nearest`` do not fill masked cells. ``extrapolate_tides``
-        still controls pyTMD nearest/IDW fill of points that remain outside
-        the model grid, limited by ``extrapolation_distance`` kilometres.
+        ``bilinear`` (the historical default) is xarray ``linear`` after
+        :meth:`_fill_masked_model_cells`. Strict ``linear`` / ``nearest``
+        do not fill masked cells. ``extrapolate_tides`` still controls
+        pyTMD nearest/IDW fill of points that remain outside the model
+        grid, limited by ``extrapolation_distance`` kilometres.
         """
         # open_dataset's reduce_constituents defaults to group "z"; reduce
         # the requested group explicitly (needed for u/v).

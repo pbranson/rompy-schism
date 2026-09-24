@@ -215,13 +215,39 @@ def test_tide_inpaint_iterations_defaults_to_nearest_neighbor():
 
 
 def test_tide_interpolation_method_rejects_unknown_names():
-    """Only the pyTMD 3 names plus the pyTMD 2 bilinear/spline aliases."""
+    """Supported set is bilinear, linear, and nearest."""
     from pydantic import ValidationError
 
     from rompy_schism.boundary_core import TidalDataset
 
     with pytest.raises(ValidationError):
         TidalDataset(tide_interpolation_method="cubic")
+
+
+def test_spline_is_deprecated_alias_of_bilinear():
+    """spline warns and is stored as the coastal bilinear path."""
+    from rompy_schism.bctides import Bctides
+    from rompy_schism.boundary_core import TidalDataset
+
+    with pytest.warns(DeprecationWarning, match="spline"):
+        dataset = TidalDataset(tide_interpolation_method="SPLINE")
+    assert dataset.tide_interpolation_method == "bilinear"
+
+    with pytest.warns(DeprecationWarning, match="spline"):
+        bc = Bctides(
+            hgrid=None,
+            constituents=["m2"],
+            tide_interpolation_method="spline",
+        )
+    assert bc.tide_interpolation_method == "bilinear"
+    assert bc._xarray_interp_method() == ("linear", True)
+
+
+def test_bctides_rejects_negative_inpaint_iterations():
+    from rompy_schism.bctides import Bctides
+
+    with pytest.raises(ValueError, match="tide_inpaint_iterations"):
+        Bctides(hgrid=None, constituents=["m2"], tide_inpaint_iterations=-1)
 
 
 @pytest.mark.parametrize("data_type", ["h", "uv"])

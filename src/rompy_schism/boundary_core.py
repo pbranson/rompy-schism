@@ -52,6 +52,7 @@ from rompy.core.boundary import DataBoundary
 from rompy.logging import get_logger
 
 from .bctides import Bctides
+from .bctides import normalize_tide_interpolation_method as _normalize_tide_method
 
 # Import from local modules
 from .boundary import BoundaryData
@@ -149,21 +150,19 @@ class TidalDataset(BaseModel):
         description="Apply nodal corrections to tidal constituents",
     )
 
-    tide_interpolation_method: Literal["bilinear", "spline", "linear", "nearest"] = (
-        Field(
-            default="bilinear",
-            description=(
-                "How tidal harmonics are interpolated onto boundary nodes. "
-                "pyTMD 3 Dataset.tmd.interp on a regular grid only accepts "
-                "the xarray methods 'linear' and 'nearest'; those two names "
-                "are passed through unchanged and do not fill masked cells. "
-                "'bilinear' (default) and 'spline' are pyTMD 2 names. pyTMD 3 "
-                "removed interpolate.bilinear and interpolate.spline, so both "
-                "are applied as xarray 'linear' after Dataset.tmd.inpaint "
-                "(see tide_inpaint_iterations) so wet coastal nodes next to "
-                "masked cells stay finite."
-            ),
-        )
+    tide_interpolation_method: Literal["bilinear", "linear", "nearest"] = Field(
+        default="bilinear",
+        description=(
+            "How tidal harmonics are interpolated onto boundary nodes. "
+            "Supported values: 'bilinear' (default), 'linear', 'nearest'. "
+            "pyTMD 3 Dataset.tmd.interp on a regular grid only accepts the "
+            "xarray methods 'linear' and 'nearest'; those names are passed "
+            "through and do not fill masked cells. 'bilinear' is the "
+            "historical name for xarray 'linear' after Dataset.tmd.inpaint "
+            "(see tide_inpaint_iterations), which keeps wet coastal nodes "
+            "next to masked cells finite. 'spline' is deprecated, warns, "
+            "and is stored as 'bilinear'. pyTMD 3 has no spline interpolator."
+        ),
     )
 
     tide_inpaint_iterations: int = Field(
@@ -172,21 +171,32 @@ class TidalDataset(BaseModel):
         description=(
             "Iteration count N passed to pyTMD Dataset.tmd.inpaint "
             "(pyTMD.interpolate.inpaint) when tide_interpolation_method is "
-            "'bilinear' or 'spline'. 0 (default, and pyTMD's default) fills "
-            "masked model cells with the nearest finite node. N>0 runs that "
-            "many DCT penalized least-squares iterations after the "
+            "'bilinear'. 0 (default, and pyTMD's default) fills masked "
+            "model cells with the nearest finite node. N>0 runs that many "
+            "DCT penalized least-squares iterations after the "
             "nearest-neighbor seed. Ignored for 'linear' and 'nearest'."
         ),
     )
 
     extrapolate_tides: bool = Field(
         default=False,
-        description="Extrapolate tidal constituents outside the domain. If False, will raise an error if any constituent is outside the domain.",
+        description=(
+            "After interpolation, fill harmonics that are still outside the "
+            "tide model using pyTMD nearest neighbors within "
+            "extrapolation_distance kilometres. If False, non-finite "
+            "harmonics raise instead of being written to bctides.in. "
+            "Masked cells next to wet nodes are handled by 'bilinear', "
+            "not by this flag."
+        ),
     )
 
     extrapolation_distance: float = Field(
         default=50.0,
-        description="Distance in kilometre to extrapolate tidal constituents outside the tidal model. Only used if extrapolate_tides is True.",
+        description=(
+            "Distance in kilometres. Pads the tide-model crop around "
+            "boundary nodes (at least 0.5 degrees) and, when "
+            "extrapolate_tides is True, limits pyTMD extrapolation."
+        ),
     )
 
     extra_databases: Optional[List[Path]] = Field(
@@ -273,10 +283,8 @@ class TidalDataset(BaseModel):
     @field_validator("tide_interpolation_method", mode="before")
     @classmethod
     def normalize_tide_interpolation_method(cls, v):
-        """Accept the pyTMD 2/3 names, case-insensitively."""
-        if isinstance(v, str):
-            return v.strip().lower()
-        return v
+        """Lower-case method names. Deprecated ``spline`` becomes ``bilinear``."""
+        return _normalize_tide_method(v, stacklevel=4)
 
     @field_validator(
         "tidal_potential", "nodal_corrections", "extrapolate_tides", mode="before"

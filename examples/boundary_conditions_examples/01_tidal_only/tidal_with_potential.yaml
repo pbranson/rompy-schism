@@ -26,7 +26,7 @@ config:
         - M2
         - S2
         - N2
-        tide_interpolation_method: 'spline'
+        tide_interpolation_method: 'bilinear'
         nodal_corrections: true
         extrapolate_tides: true
         extrapolation_distance: 50.0 # in km
