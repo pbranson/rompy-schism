@@ -617,6 +617,18 @@ class Opt(NamelistBaseModel):
         120.0,
         description="Sea-level rise rate in mm/year for marsh model. Only used if USE_MARSH is on.",
     )
+    age_marsh_min: Optional[float] = Field(
+        None,
+        description="Marsh age [days] neighbouring cells need before marsh migrates.",
+    )
+    istemp: Optional[int] = Field(
+        None,
+        description="Sediment temperature model switch; non-zero needs ihconsv != 0.",
+    )
+    relax_2_airt: Optional[float] = Field(
+        None,
+        description="Relaxation of sediment temperature to air temperature, in [0, 1].",
+    )
     nstep_ice: Optional[int] = Field(
         1, description="Number of SCHISM steps between calls to the ICE module."
     )
@@ -638,6 +650,13 @@ class Opt(NamelistBaseModel):
         description=(
             "Fraction of vertical flux closure adjustment applied at surface "
             "for T,S. Rendered as 1.0 where declared."
+        ),
+    )
+    vclose_surf_frac0: Optional[float] = Field(
+        None,
+        description=(
+            "Surface vertical flux closure factor in [0, 1]; negative reads "
+            "vclose.gr3. Replaces vclose_surf_frac from schism-dev-20261019."
         ),
     )
     iadjust_mass_consv0__1: Optional[int] = Field(0, description="T")
@@ -911,6 +930,27 @@ class Opt(NamelistBaseModel):
             raise ValueError("vclose_surf_frac must be between 0 and 1")
         return v
 
+    @field_validator("vclose_surf_frac0")
+    @classmethod
+    def check_vclose_surf_frac0(cls, v):
+        if v is not None and v > 1:
+            raise ValueError("vclose_surf_frac0 must be <= 1")
+        return v
+
+    @field_validator("age_marsh_min")
+    @classmethod
+    def check_age_marsh_min(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("age_marsh_min must be non-negative")
+        return v
+
+    @field_validator("relax_2_airt")
+    @classmethod
+    def check_relax_2_airt(cls, v):
+        if v is not None and not 0 <= v <= 1:
+            raise ValueError("relax_2_airt must be between 0 and 1")
+        return v
+
     @field_validator("h_massconsv")
     @classmethod
     def check_h_massconsv(cls, v):
@@ -931,6 +971,12 @@ class Opt(NamelistBaseModel):
             raise ValueError("vnh2 must be greater than vnh1")
         return self
 
+    @model_validator(mode="after")
+    def check_istemp_needs_heat_exchange(self):
+        if self.istemp not in (None, 0) and self.ihconsv == 0:
+            raise ValueError("istemp != 0 requires ihconsv != 0")
+        return self
+
 
 class Schout(NamelistBaseModel):
     nc_out: Optional[int] = Field(
@@ -940,6 +986,10 @@ class Schout(NamelistBaseModel):
     iof_ugrid: Optional[int] = Field(
         0,
         description="UGRID option for 3D outputs. If non-zero, 3D outputs will have UGRID metadata.",
+    )
+    chunk_size_vrt: Optional[int] = Field(
+        None,
+        description="Layers per vertical output chunk; -1 writes the whole volume.",
     )
     nhot: Optional[int] = Field(
         0,
@@ -1517,6 +1567,13 @@ class Schout(NamelistBaseModel):
     def validate_iof_ugrid(cls, v):
         if v < 0:
             raise ValueError("iof_ugrid must be non-negative")
+        return v
+
+    @field_validator("chunk_size_vrt")
+    @classmethod
+    def validate_chunk_size_vrt(cls, v):
+        if v is not None and v != -1 and v <= 0:
+            raise ValueError("chunk_size_vrt must be -1 or positive")
         return v
 
     @field_validator("nhot")

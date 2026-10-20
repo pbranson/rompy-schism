@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from rompy_schism.config import SCHISMConfig
+from rompy_schism.schema import resolve_schema
 
 FIXTURES = Path(__file__).parents[1] / "schema_fixtures"
 
@@ -16,6 +17,7 @@ FIXTURES = Path(__file__).parents[1] / "schema_fixtures"
         ("unversioned-v513.yaml", "schism-v5.13"),
         ("explicit-v513.yaml", "schism-v5.13"),
         ("explicit-dev-20250523.yaml", "schism-dev-20250523"),
+        ("explicit-schism-master.yaml", "schism-dev-20261019"),
     ],
 )
 def test_complete_config_yaml_round_trip_preserves_rendering(fixture, expected_version):
@@ -28,7 +30,7 @@ def test_complete_config_yaml_round_trip_preserves_rendering(fixture, expected_v
     restored = SCHISMConfig.model_validate(yaml.safe_load(yaml_text))
     restored_rendered = restored.nml.param.render(restored.schema_version)
 
-    assert original.schema_version == expected_version
+    assert resolve_schema(original.schema_version) == expected_version
     assert restored.schema_version == expected_version
     assert restored_rendered == original_rendered
     assert serialized["schema_version"] == expected_version
@@ -42,6 +44,8 @@ def test_complete_config_yaml_round_trip_preserves_rendering(fixture, expected_v
     else:
         assert core["nmarsh_types"] == 2
         assert "isconsv" not in opt
+    if expected_version == "schism-dev-20261019":
+        assert "veg_lai" not in opt and "vclose_surf_frac" not in opt
 
 
 def test_unversioned_and_explicit_v513_are_semantically_identical():

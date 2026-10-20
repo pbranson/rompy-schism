@@ -5,6 +5,7 @@ from typing import Literal
 SchismSchemaVersion = Literal[
     "schism-v5.13",
     "schism-dev-20250523",
+    "schism-dev-20261019",
     "schism-master",
 ]
 
@@ -17,6 +18,7 @@ DEFAULT_SCHISM_SCHEMA: SchismSchemaVersion = "schism-v5.13"
 SCHISM_PINS: dict[str, str] = {
     "schism-v5.13": "v5.13.0",
     "schism-dev-20250523": "2135910d067608ca6b3d3663234cc0f01fd11f3d",
+    "schism-dev-20261019": "a3e58bff9172bf76ff5c96c4e7ad78a2699971a9",
 }
 
 # Authoring alias for the newest pin. Serialized configs record the pin, so a

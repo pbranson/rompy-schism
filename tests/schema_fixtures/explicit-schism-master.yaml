@@ -1,0 +1,14 @@
+model_type: schism
+schema_version: schism-master
+grid:
+  hgrid:
+    id: hgrid
+    model_type: data_blob
+    source: tests/data/schism/hgrid.gr3
+  rough: 0.02
+nml:
+  param:
+    core:
+      dt: 150.0
+      ibc: 1
+      ibtp: 0

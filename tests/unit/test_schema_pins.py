@@ -20,8 +20,12 @@ def test_master_alias_resolves_to_newest_pin():
     assert resolve_schema(SCHISM_MASTER_ALIAS) == list(SCHISM_PINS)[-1]
 
 
+def test_master_is_dev_20261019():
+    assert resolve_schema("schism-master") == "schism-dev-20261019"
+
+
 def test_pins_are_ordered_from_the_permanent_default():
-    assert list(SCHISM_PINS)[0] == DEFAULT_SCHISM_SCHEMA
+    assert next(iter(SCHISM_PINS)) == DEFAULT_SCHISM_SCHEMA
     assert schema_index("schism-v5.13") < schema_index("schism-dev-20250523")
 
 
