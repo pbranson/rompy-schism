@@ -16,10 +16,7 @@ from rompy_schism.data import (
 )
 from rompy_schism.grid import SCHISMGrid
 from rompy_schism.namelists import NML, Param
-
-# This is the first upstream revision which has both nmarsh_types and the removal
-# of isconsv. Pinning it makes the compatibility boundary stable if master changes.
-POST_V513_REF = "2135910d067608ca6b3d3663234cc0f01fd11f3d"
+from rompy_schism.schema import SCHISM_PINS
 
 
 def _compatibility_model_run(tmp_path, tidal_data_files, schema_version, param):
@@ -80,7 +77,7 @@ def _compatibility_model_run(tmp_path, tidal_data_files, schema_version, param):
     ("schism_ref", "schema_version", "param"),
     [
         pytest.param(
-            "v5.13.0",
+            SCHISM_PINS["schism-v5.13"],
             "schism-v5.13",
             Param(
                 core={
@@ -94,8 +91,8 @@ def _compatibility_model_run(tmp_path, tidal_data_files, schema_version, param):
             id="schism-v5.13",
         ),
         pytest.param(
-            POST_V513_REF,
-            "schism-v5.14",
+            SCHISM_PINS["schism-dev-20250523"],
+            "schism-dev-20250523",
             Param(
                 core={
                     "ipre": 1,
@@ -106,7 +103,16 @@ def _compatibility_model_run(tmp_path, tidal_data_files, schema_version, param):
                 },
                 schout={"iout_sta": 0},
             ),
-            id="schism-v5.14-schema",
+            id="schism-dev-20250523",
+        ),
+        pytest.param(
+            SCHISM_PINS["schism-dev-20261019"],
+            "schism-dev-20261019",
+            Param(
+                core={"ipre": 1, "dt": 150.0, "ibc": 1, "ibtp": 0},
+                schout={"iout_sta": 0},
+            ),
+            id="schism-dev-20261019",
         ),
     ],
 )
@@ -153,9 +159,11 @@ def test_generated_param_schema_initializes_in_schism(
     generated_param = Path(model_run.staging_dir) / "param.nml"
     rendered = generated_param.read_text()
     assert "schema_version" not in rendered
-    if schema_version == "schism-v5.14":
-        assert "nmarsh_types = 2" in rendered
-        assert "isconsv" not in rendered
-    else:
+    if schema_version == "schism-v5.13":
         assert "isconsv = 0" in rendered
         assert "nmarsh_types" not in rendered
+    else:
+        assert "nmarsh_types = 2" in rendered
+        assert "isconsv" not in rendered
+    if schema_version == "schism-dev-20261019":
+        assert "veg_lai" not in rendered

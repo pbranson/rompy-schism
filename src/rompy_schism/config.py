@@ -25,7 +25,7 @@ from .data import SCHISMData
 from .grid import SCHISMGrid
 from .namelists import NML
 from .namelists.param import Param
-from .schema import DEFAULT_SCHISM_SCHEMA, SchismSchemaVersion
+from .schema import DEFAULT_SCHISM_SCHEMA, SchismSchemaVersion, resolve_schema
 
 logger = get_logger(__name__)
 
@@ -135,7 +135,7 @@ class SCHISMConfig(BaseConfig):
 
         # Explicitly handle required fields
         result["model_type"] = self.model_type
-        result["schema_version"] = self.schema_version
+        result["schema_version"] = resolve_schema(self.schema_version)
 
         # Handle grid separately to process GR3Generator objects
         if self.grid is not None:

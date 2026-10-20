@@ -1,5 +1,5 @@
 model_type: schism
-schema_version: schism-v5.14
+schema_version: schism-master
 grid:
   hgrid:
     id: hgrid

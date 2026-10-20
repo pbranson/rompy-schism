@@ -8,7 +8,12 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field, field_validator, model_validator
 
 from rompy_schism.namelists.basemodel import NamelistBaseModel
-from rompy_schism.schema import DEFAULT_SCHISM_SCHEMA, SchismSchemaVersion
+from rompy_schism.namelists.lifecycle import LIFECYCLE
+from rompy_schism.schema import (
+    DEFAULT_SCHISM_SCHEMA,
+    SchismSchemaVersion,
+    resolve_schema,
+)
 
 
 class Core(NamelistBaseModel):
@@ -61,7 +66,7 @@ class Core(NamelistBaseModel):
     nmarsh_types: Optional[int] = Field(
         None,
         description=(
-            "Number of marsh types. Required by the schism-v5.14 schema even "
+            "Number of marsh types. Required from schism-dev-20250523 even "
             "when USE_MARSH is disabled."
         ),
     )
@@ -454,7 +459,10 @@ class Opt(NamelistBaseModel):
         description="only used if nws=-1: hurricane model type (1: Holland; 10: GAHM)",
     )
     ihconsv: Optional[int] = Field(0, description="heat exchange option")
-    isconsv: Optional[int] = Field(0, description="evaporation/precipitation model")
+    isconsv: Optional[int] = Field(
+        None,
+        description="evaporation/precipitation model; rendered as 0 where declared",
+    )
     i_hmin_airsea_ex: Optional[int] = Field(2, description="no effect if ihconsv=0")
     hmin_airsea_ex: Optional[float] = Field(
         0.2, description="[m], no effect if ihconsv=0"
@@ -538,8 +546,11 @@ class Opt(NamelistBaseModel):
     # SCHISM v5.13 and v5.14 declare veg_lai and veg_cw as integers: a value such as
     # 1.5 is a fatal namelist read error, and SCHISM's own default of 1.5 becomes 1.
     veg_lai: Optional[int] = Field(
-        1,
-        description="Leaf Area Index [-]; used if iveg=2. Ganthy suggests 0-10?",
+        None,
+        description=(
+            "Leaf Area Index [-]; used if iveg=2. Ganthy suggests 0-10? "
+            "Rendered as 1 where declared."
+        ),
     )
     veg_cw: Optional[int] = Field(
         1,
@@ -606,6 +617,18 @@ class Opt(NamelistBaseModel):
         120.0,
         description="Sea-level rise rate in mm/year for marsh model. Only used if USE_MARSH is on.",
     )
+    age_marsh_min: Optional[float] = Field(
+        None,
+        description="Marsh age [days] neighbouring cells need before marsh migrates.",
+    )
+    istemp: Optional[int] = Field(
+        None,
+        description="Sediment temperature model switch; non-zero needs ihconsv != 0.",
+    )
+    relax_2_airt: Optional[float] = Field(
+        None,
+        description="Relaxation of sediment temperature to air temperature, in [0, 1].",
+    )
     nstep_ice: Optional[int] = Field(
         1, description="Number of SCHISM steps between calls to the ICE module."
     )
@@ -623,8 +646,18 @@ class Opt(NamelistBaseModel):
         description="Reference water density for Boussinesq approximation in kg/m^3.",
     )
     vclose_surf_frac: Optional[float] = Field(
-        1.0,
-        description="Fraction of vertical flux closure adjustment applied at surface for T,S.",
+        None,
+        description=(
+            "Fraction of vertical flux closure adjustment applied at surface "
+            "for T,S. Rendered as 1.0 where declared."
+        ),
+    )
+    vclose_surf_frac0: Optional[float] = Field(
+        None,
+        description=(
+            "Surface vertical flux closure factor in [0, 1]; negative reads "
+            "vclose.gr3. Replaces vclose_surf_frac from schism-dev-20261019."
+        ),
     )
     iadjust_mass_consv0__1: Optional[int] = Field(0, description="T")
     iadjust_mass_consv0__2: Optional[int] = Field(0, description="S")
@@ -737,7 +770,7 @@ class Opt(NamelistBaseModel):
     @field_validator("veg_lai")
     @classmethod
     def validate_veg_lai(cls, v):
-        if v < 0:
+        if v is not None and v < 0:
             raise ValueError("veg_lai must be non-negative")
         return v
 
@@ -893,8 +926,29 @@ class Opt(NamelistBaseModel):
     @field_validator("vclose_surf_frac")
     @classmethod
     def check_vclose_surf_frac(cls, v):
-        if not 0 <= v <= 1:
+        if v is not None and not 0 <= v <= 1:
             raise ValueError("vclose_surf_frac must be between 0 and 1")
+        return v
+
+    @field_validator("vclose_surf_frac0")
+    @classmethod
+    def check_vclose_surf_frac0(cls, v):
+        if v is not None and v > 1:
+            raise ValueError("vclose_surf_frac0 must be <= 1")
+        return v
+
+    @field_validator("age_marsh_min")
+    @classmethod
+    def check_age_marsh_min(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("age_marsh_min must be non-negative")
+        return v
+
+    @field_validator("relax_2_airt")
+    @classmethod
+    def check_relax_2_airt(cls, v):
+        if v is not None and not 0 <= v <= 1:
+            raise ValueError("relax_2_airt must be between 0 and 1")
         return v
 
     @field_validator("h_massconsv")
@@ -917,6 +971,12 @@ class Opt(NamelistBaseModel):
             raise ValueError("vnh2 must be greater than vnh1")
         return self
 
+    @model_validator(mode="after")
+    def check_istemp_needs_heat_exchange(self):
+        if self.istemp not in (None, 0) and self.ihconsv == 0:
+            raise ValueError("istemp != 0 requires ihconsv != 0")
+        return self
+
 
 class Schout(NamelistBaseModel):
     nc_out: Optional[int] = Field(
@@ -926,6 +986,10 @@ class Schout(NamelistBaseModel):
     iof_ugrid: Optional[int] = Field(
         0,
         description="UGRID option for 3D outputs. If non-zero, 3D outputs will have UGRID metadata.",
+    )
+    chunk_size_vrt: Optional[int] = Field(
+        None,
+        description="Layers per vertical output chunk; -1 writes the whole volume.",
     )
     nhot: Optional[int] = Field(
         0,
@@ -1505,6 +1569,13 @@ class Schout(NamelistBaseModel):
             raise ValueError("iof_ugrid must be non-negative")
         return v
 
+    @field_validator("chunk_size_vrt")
+    @classmethod
+    def validate_chunk_size_vrt(cls, v):
+        if v is not None and v != -1 and v <= 0:
+            raise ValueError("chunk_size_vrt must be -1 or positive")
+        return v
+
     @field_validator("nhot")
     @classmethod
     def validate_nhot(cls, v):
@@ -1616,39 +1687,34 @@ class Param(NamelistBaseModel):
         return self
 
     def validate_schema(self, schema_version: SchismSchemaVersion) -> None:
-        """Validate fields whose meaning depends on the full SCHISM schema."""
-        if schema_version == "schism-v5.13":
-            if self.core is not None and self.core.nmarsh_types is not None:
-                raise ValueError("core.nmarsh_types is not supported by schism-v5.13")
-            return
-
-        if schema_version == "schism-v5.14":
-            if self.opt is not None and self.opt.isconsv not in (None, 0):
-                raise ValueError(
-                    "opt.isconsv is not supported by schism-v5.14; compile "
-                    "SCHISM with PREC_EVAP instead"
-                )
-            return
-
-        raise ValueError(f"Unsupported SCHISM schema version: {schema_version}")
+        """Reject values for names the resolved SCHISM pin does not declare."""
+        schema = resolve_schema(schema_version)
+        for row in LIFECYCLE:
+            section = getattr(self, row.group)
+            if section is None or getattr(section, row.name) is None:
+                continue
+            if not row.declared_in(schema):
+                raise ValueError(row.unsupported_message(schema))
 
     def resolved_dump(self, schema_version: SchismSchemaVersion) -> Dict[str, Any]:
-        """Serialize fields after applying the selected schema contract."""
-        self.validate_schema(schema_version)
+        """Serialize the names the resolved pin declares, with its fills."""
+        schema = resolve_schema(schema_version)
+        self.validate_schema(schema)
         sections = self.model_dump()
-
-        if schema_version == "schism-v5.13":
-            if sections.get("core") is not None:
-                sections["core"].pop("nmarsh_types", None)
-            return sections
-
-        if (
-            sections.get("core") is not None
-            and sections["core"].get("nmarsh_types") is None
-        ):
-            sections["core"]["nmarsh_types"] = 2
-        if sections.get("opt") is not None:
-            sections["opt"].pop("isconsv", None)
+        for row in LIFECYCLE:
+            values = sections.get(row.group)
+            if values is None:
+                continue
+            if not row.declared_in(schema):
+                values.pop(row.name, None)
+            elif values.get(row.name) is None and row.fill is not None:
+                values[row.name] = row.fill
+        for group, values in sections.items():
+            if values is not None:
+                fields = type(getattr(self, group)).model_fields
+                sections[group] = {
+                    name: values[name] for name in fields if name in values
+                }
         return sections
 
     def render(
