@@ -15,7 +15,7 @@ FIXTURES = Path(__file__).parents[1] / "schema_fixtures"
     [
         ("unversioned-v513.yaml", "schism-v5.13"),
         ("explicit-v513.yaml", "schism-v5.13"),
-        ("explicit-v514.yaml", "schism-v5.14"),
+        ("explicit-dev-20250523.yaml", "schism-dev-20250523"),
     ],
 )
 def test_complete_config_yaml_round_trip_preserves_rendering(fixture, expected_version):

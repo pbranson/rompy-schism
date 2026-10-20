@@ -95,7 +95,7 @@ def _compatibility_model_run(tmp_path, tidal_data_files, schema_version, param):
         ),
         pytest.param(
             POST_V513_REF,
-            "schism-v5.14",
+            "schism-dev-20250523",
             Param(
                 core={
                     "ipre": 1,
@@ -106,7 +106,7 @@ def _compatibility_model_run(tmp_path, tidal_data_files, schema_version, param):
                 },
                 schout={"iout_sta": 0},
             ),
-            id="schism-v5.14-schema",
+            id="schism-dev-20250523",
         ),
     ],
 )
@@ -153,7 +153,7 @@ def test_generated_param_schema_initializes_in_schism(
     generated_param = Path(model_run.staging_dir) / "param.nml"
     rendered = generated_param.read_text()
     assert "schema_version" not in rendered
-    if schema_version == "schism-v5.14":
+    if schema_version == "schism-dev-20250523":
         assert "nmarsh_types = 2" in rendered
         assert "isconsv" not in rendered
     else:

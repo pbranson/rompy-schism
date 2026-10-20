@@ -17,8 +17,8 @@ DEV_CUSTOM = {
 GOLDEN_CASES = [
     ("param-v5.13-default", "schism-v5.13", {}),
     ("param-v5.13-custom", "schism-v5.13", V513_CUSTOM),
-    ("param-dev-20250523-default", "schism-v5.14", {}),
-    ("param-dev-20250523-custom", "schism-v5.14", DEV_CUSTOM),
+    ("param-dev-20250523-default", "schism-dev-20250523", {}),
+    ("param-dev-20250523-custom", "schism-dev-20250523", DEV_CUSTOM),
 ]
 
 

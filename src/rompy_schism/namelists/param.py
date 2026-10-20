@@ -8,7 +8,11 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field, field_validator, model_validator
 
 from rompy_schism.namelists.basemodel import NamelistBaseModel
-from rompy_schism.schema import DEFAULT_SCHISM_SCHEMA, SchismSchemaVersion
+from rompy_schism.schema import (
+    DEFAULT_SCHISM_SCHEMA,
+    SchismSchemaVersion,
+    resolve_schema,
+)
 
 
 class Core(NamelistBaseModel):
@@ -61,7 +65,7 @@ class Core(NamelistBaseModel):
     nmarsh_types: Optional[int] = Field(
         None,
         description=(
-            "Number of marsh types. Required by the schism-v5.14 schema even "
+            "Number of marsh types. Required from schism-dev-20250523 even "
             "when USE_MARSH is disabled."
         ),
     )
@@ -1617,15 +1621,16 @@ class Param(NamelistBaseModel):
 
     def validate_schema(self, schema_version: SchismSchemaVersion) -> None:
         """Validate fields whose meaning depends on the full SCHISM schema."""
+        schema_version = resolve_schema(schema_version)
         if schema_version == "schism-v5.13":
             if self.core is not None and self.core.nmarsh_types is not None:
                 raise ValueError("core.nmarsh_types is not supported by schism-v5.13")
             return
 
-        if schema_version == "schism-v5.14":
+        if schema_version == "schism-dev-20250523":
             if self.opt is not None and self.opt.isconsv not in (None, 0):
                 raise ValueError(
-                    "opt.isconsv is not supported by schism-v5.14; compile "
+                    "opt.isconsv is not supported by schism-dev-20250523; compile "
                     "SCHISM with PREC_EVAP instead"
                 )
             return
@@ -1634,6 +1639,7 @@ class Param(NamelistBaseModel):
 
     def resolved_dump(self, schema_version: SchismSchemaVersion) -> Dict[str, Any]:
         """Serialize fields after applying the selected schema contract."""
+        schema_version = resolve_schema(schema_version)
         self.validate_schema(schema_version)
         sections = self.model_dump()
 
