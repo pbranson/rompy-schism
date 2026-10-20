@@ -567,8 +567,13 @@ class Vegetation(NamelistBaseModel):
         description="Vertical scaling for stem diameter. Only used if iveg=1.",
     )
     veg_lai: Optional[float] = Field(
-        1.0,
-        description="Leaf Area Index [-]; used if iveg=2. Ganthy suggests 0-10?",
+        None,
+        description=(
+            "Retired Leaf Area Index. SCHISM 5a174a05 removed veg_lai from "
+            "namelist /OPT/. Older revisions initialize it to 1 before the "
+            "read, so the default render must omit it. Set only for a SCHISM "
+            "build that still declares the name."
+        ),
     )
     veg_cw: Optional[float] = Field(
         1.5,
@@ -616,7 +621,7 @@ class Vegetation(NamelistBaseModel):
     @field_validator("veg_lai")
     @classmethod
     def validate_veg_lai(cls, v):
-        if v < 0:
+        if v is not None and v < 0:
             raise ValueError("veg_lai must be non-negative")
         return v
 

@@ -220,7 +220,6 @@ veg_vert_z = 0.0, 0.5, 1.0
 veg_vert_scale_cd = 1.0, 1.0, 1.0
 veg_vert_scale_n = 1.0, 1.0, 1.0
 veg_vert_scale_d = 1.0, 1.0, 1.0
-veg_lai = 1.0
 veg_cw = 1.5
 /
 
